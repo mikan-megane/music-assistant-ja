@@ -1,0 +1,5 @@
+node_modules
+.git
+music_assistant_frontend
+*.log
+.DS_Store
