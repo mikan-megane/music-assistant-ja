@@ -19,7 +19,21 @@ RUN git clone --depth 1 --branch "${FRONTEND_REF}" https://github.com/music-assi
 
 # Drop our Japanese file next to the other locale JSONs so vite-i18n picks
 # it up automatically (no source code changes needed upstream).
+# NOTE: ja.json MUST be saved as UTF-8 *without* BOM. A leading BOM (EF BB BF)
+# makes JSON.parse() throw inside @intlify/unplugin-vue-i18n, which then
+# silently skips the file and "ja" never ends up in availableLocales — i.e.
+# Japanese won't show up in Settings → Language.
 COPY ja.json src/translations/ja.json
+
+# Add a "Japanese" label to en.json so the language dropdown shows a readable
+# name in every UI locale (en is the configured fallbackLocale for all).
+RUN node <<'EOF'
+const fs = require('fs');
+const p = 'src/translations/en.json';
+const j = JSON.parse(fs.readFileSync(p, 'utf8'));
+j.settings.language.options.ja = 'Japanese';
+fs.writeFileSync(p, JSON.stringify(j, null, 2) + '\n');
+EOF
 
 # Frozen install uses upstream's lockfile as-is.
 RUN pnpm install --frozen-lockfile
