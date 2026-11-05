@@ -28,6 +28,14 @@ jobs:
   build:
     # Free native arm64 runner for public repos — no QEMU emulation needed.
     runs-on: ubuntu-24.04-arm
+    # Kill the job if it exceeds 30 min (a healthy build finishes in ~4 min;
+    # the old weekly QEMU run hit the 6 h default limit before being cancelled).
+    timeout-minutes: 30
+    # Never run two builds at once (daily cron + push can overlap);
+    # a newer run cancels the older in-progress one.
+    concurrency:
+      group: build
+      cancel-in-progress: true
     permissions:
       contents: read
       packages: write
