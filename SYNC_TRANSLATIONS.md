@@ -4,6 +4,8 @@
 
 Music Assistant の日本語翻訳ファイル (`ja.json`, `server_ja.json`) をアップストリームの英語版と同期し、新しいキーを翻訳する手順です。
 
+同期作業は `scripts/translation_sync.py` で半自動化されています。翻訳(日本語を書く)だけが人間/エージェントの作業で、比較・マージ・検証はすべてスクリプトが担います。
+
 ## アップストリームのURL
 
 | ファイル | URL |
@@ -15,92 +17,123 @@ Music Assistant の日本語翻訳ファイル (`ja.json`, `server_ja.json`) を
 
 ## ファイル構造
 
-### ja.json (フロントエンド)
-- ネストされたJSON（オブジェクトの中にオブジェクト）
-- `en.json` と完全に同じ構造
+| ファイル | 対象 | 構造 | スクリプト上の呼び名 |
+|----------|------|------|----------------------|
+| `ja.json` | フロントエンド | ネストされたJSON (en.json と同じ構造) | `front` |
+| `server_ja.json` | サーバー | フラットなドット区切りキー | `srv` |
 
-### server_ja.json (サーバー)
-- フラットなドット区切りキー (`common.config_categories.advanced` など)
-- `en.json` と同じフラット構造
+出力スタイルは既存ファイルに合わせること:
+- `ja.json`: インデント4、末尾に改行、UTF-8 **BOMなし** (BOM があると `@intlify/unplugin-vue-i18n` が JSON.parse に失敗し、言語選択に日本語が出なくなる — Dockerfile のチェック参照)
+- `server_ja.json`: インデント2、末尾に改行
 
-## 同期スクリプト
-
-Pythonでキー比較と同期を行う：
-
-```bash
-python3 << 'PYEOF'
-import json, urllib.request
-
-# --- フロントエンド比較 ---
-en_front_url = 'https://raw.githubusercontent.com/music-assistant/frontend/main/src/translations/en.json'
-with urllib.request.urlopen(en_front_url) as f:
-    en_front = json.loads(f.read().decode('utf-8'))
-
-with open('ja.json', 'r') as f:
-    ja_front = json.load(f)
-
-def walk_keys(d, prefix=''):
-    keys = []
-    if isinstance(d, dict):
-        for k, v in d.items():
-            full = f'{prefix}.{k}' if prefix else k
-            if isinstance(v, dict):
-                keys.extend(walk_keys(v, full))
-            else:
-                keys.append(full)
-    return keys
-
-en_keys = walk_keys(en_front)
-ja_keys = walk_keys(ja_front)
-missing_front = sorted(set(en_keys) - set(ja_keys))
-
-print(f'=== FRONTEND (ja.json) ===')
-print(f'English keys: {len(en_keys)}')
-print(f'Japanese keys: {len(ja_keys)}')
-print(f'Missing keys: {len(missing_front)}')
-for k in missing_front:
-    print(f'  {k} = {repr(get_nested(en_front, k))}')
-
-# --- サーバー比較 ---
-en_srv_url = 'https://raw.githubusercontent.com/music-assistant/server/dev/music_assistant/translations/en.json'
-with urllib.request.urlopen(en_srv_url) as f:
-    en_srv = json.loads(f.read().decode('utf-8'))
-
-with open('server_ja.json', 'r') as f:
-    ja_srv = json.load(f)
-
-missing_srv = sorted(set(en_srv.keys()) - set(ja_srv.keys()))
-print(f'\n=== SERVER (server_ja.json) ===')
-print(f'English keys: {len(en_srv)}')
-print(f'Japanese keys: {len(ja_srv)}')
-print(f'Missing keys: {len(missing_srv)}')
-for k in missing_srv:
-    print(f'  {k} = {repr(en_srv[k])}')
-PYEOF
-```
-
-## 翻訳後のプッシュ
+## 同期ワークフロー
 
 ```bash
+# 1. 差分サマリを確認 (未翻訳キー・上流で廃止されたキーの数)
+python3 scripts/translation_sync.py check
+
+# 2. 未翻訳キーを TSV で書き出す
+python3 scripts/translation_sync.py export
+#   -> .translation-sync/missing_front.tsv  (key<TAB>英語値)
+#   -> .translation-sync/missing_srv.tsv
+
+# 3. TSV の値列を日本語訳で埋める
+#    (ファイル名に front/srv を含めた翻訳済みファイルを用意)
+#    例: trans_front_1.tsv, trans_front_2.tsv, trans_srv_1.tsv ...
+
+# 4. マージ (検証込みで ja.json / server_ja.json を再構築)
+python3 scripts/translation_sync.py merge workdir/trans_front_*.tsv workdir/trans_srv_*.tsv
+#    引数を省略すると .translation-sync/trans_*.tsv を自動で拾う
+
+# 5. 差分を確認してコミット
 git add ja.json server_ja.json
 git commit -m "sync: update Japanese translations"
 git push
 ```
 
-プッシュすると GitHub Actions (`.github/workflows/build.yml`) が自動的にDockerイメージをビルド・プッシュします。
+### スクリプトがやってくれること
+
+- `check` / `export`: 上流 en.json のダウンロードとスナップショット (`.translation-sync/en_*.json`)、フラット化キーの比較
+- `merge`:
+  - 既存訳を最優先で保持し、新規キーのみ翻訳TSVから採用 (en のキー順序を完全に再現)
+  - 翻訳TSVの検証: カバレッジ、プレースホルダーの一致(複数形 `|` 考慮)、改行構造、vue-i18n 特殊文字の混入、半角 `?!` の検出
+  - 半角 `?!` の自動正規化 (CJK文字の直後のみ全角化。URL など ASCII 文脈の `?` は保護)
+  - カスタムキー `settings.language.options.ja` の保持
+  - JSON 有効性・BOMなしの最終チェック
+
+## 翻訳ルール (TSVを埋める際)
+
+### TSV 形式
+
+- 1行 = `key<TAB>日本語訳`。TSV 内では改行をリテラルの `\n`、タブを `\t` として書く (merge 時に実文字へ戻る)
+- マークダウン記法 (`[text](url)`, `**bold**`, 箇条書き `-`) とインラインコードは en の構造をそのまま維持する
+
+### プレースホルダー
+
+- `{0}`, `{count}`, `{name}` などのプレースホルダーは **en と同じものを必ず残す**
+- en に複数形がある場合 (`... | ...` 区切り) は、日本語は**単一形式**でよい (日本語は複数形を持たないため。既存の ja.json もこの方針)。例: `{count} play | {count} plays` → `{count}回再生`
+
+### vue-i18n の特殊文字 (フロント側 `ja.json` のみ)
+
+- `@` と `|` はメッセージ構文 (リンク・複数形区切り) と衝突するため**翻訳に使用しない**
+- サーバー側 (`server_ja.json`) はこの制限なし
+
+### 句読点・表記
+
+- `?` `!` は全角 (`？` `！`) を使う。ただし URL 中の `?` は半角のまま (merge が自動判別・正規化する)
+- 引用は「」、文末は既存ファイルに合わせてです・ます調 (ラベルは体言止め)
+- 数値と単位の間などは半角スペースを入れる慣習 (`{0} 件` / `Music Assistant へようこそ`)
+
+### 翻訳の温存と順序
+
+- 既に日本語訳があるキーは**絶対に上書きしない** (merge が既存訳を優先する)
+- en に存在しなくなったキーは削除する (ただし下記カスタムキーを除く)
+- キー順序は en に合わせる (diff を読みやすくするため)
+
+### カスタムキー (削除しないこと)
+
+- `settings.language.options.ja` = `日本語` — アップストリームに存在しないキー。言語選択ドロップダウンに日本語を出すために必要
+
+## 用語集 (訳語の統一)
+
+| 英語 | 日本語訳 |
+|------|----------|
+| music source | ミュージックソース |
+| player | プレーヤー |
+| provider | プロバイダー |
+| pairing / pair | ペアリング / ペアリングする |
+| setup | セットアップ |
+| scrobbling | スクロブリング |
+| lossless / lossy | ロスレス / ロッシー |
+| hi-res | ハイレゾ |
+| stream quality | ストリーム品質 |
+| playlist / track / album | プレイリスト / トラック / アルバム |
+| album artist | アルバムアーティスト |
+| favorites | お気に入り |
+| remote access | リモートアクセス |
+| storage location | ストレージロケーション |
+| network share | ネットワーク共有 |
+| crossfade | クロスフェード |
+| announcement | アナウンス |
+| transcript | 文字起こし |
+| bookmark | ブックマーク |
+| on air | 放送中 |
+| queue | キュー |
+| Music Assistant / Home Assistant / Spotify など | 固有名詞は英語のまま |
 
 ## ワークフロートリガー
 
-以下のファイルが `main` ブランチにプッシュされるとビルドが走ります：
+以下のファイルが `main` ブランチにプッシュされるとビルドが走ります:
 - `ja.json`
 - `server_ja.json`
 - `Dockerfile`
 - `.github/workflows/build.yml`
 
-また、毎週月曜日 04:00 UTC に自動ビルドが実行されます。
+## キー数の実績
 
-## 注意点
+| 時点 | フロント en | サーバー en |
+|------|-------------|-------------|
+| 2025-07 | 1,627 | 2,351 |
+| 2026-11 | 2,678 | 3,142 |
 
-- `ja.json` の `settings.language.options.ja` キーはアップストリームに存在しないカスタムキーです（日本語を言語選択に追加するためのDockerfile内での注入用）
-- フロントエンドのキー数: en=1627キー (2025-07時点)
-- サーバーのキー数: en=2351キー (2025-07時点)
+最新の数値は `python3 scripts/translation_sync.py check` で確認できる。

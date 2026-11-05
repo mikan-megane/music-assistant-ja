@@ -1,3 +1,5 @@
 # Local Pi build runtime files (created by scripts/pi-local-build.sh)
 pi-local-build.log
 .pi-local-build.lock
+# translation_sync.py の作業ディレクトリ (上流スナップショットと翻訳TSV)
+.translation-sync/
