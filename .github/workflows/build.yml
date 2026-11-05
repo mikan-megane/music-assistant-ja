@@ -10,17 +10,14 @@ on:
       - .github/workflows/build.yml
   workflow_dispatch:
     inputs:
-      upstream_tag:
-        description: "Upstream MA server tag to build against (e.g. latest, 2.10.9)"
-        required: false
       image_tag:
         description: "Tag for the published image (default: latest)"
         required: false
         default: "latest"
   schedule:
-    # Daily: follow the latest stable upstream MA release.
-    # arm64-only + native arm runner keeps this well under the 6h job limit
-    # (the old weekly QEMU multi-arch run was cancelled at exactly 6h1m).
+    # Daily: follow the upstream `beta` channel. Native arm64 runner keeps this
+    # fast (~4 min) — the old weekly QEMU multi-arch run was cancelled at the
+    # 6 h job limit (see run 41439882133).
     - cron: "0 4 * * *"
 
 env:
@@ -38,32 +35,17 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Resolve upstream MA version
-        id: rel
-        run: |
-          if [ -n "${{ inputs.upstream_tag }}" ]; then
-            ver="${{ inputs.upstream_tag }}"
-          else
-            # latest stable release of music-assistant/server, e.g. "2.10.9"
-            ver="$(curl -fsSL https://api.github.com/repos/music-assistant/server/releases/latest \
-              | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n1)"
-            if [ -z "$ver" ]; then
-              echo "::warning::could not resolve latest upstream release; skipping run"
-              exit 1
-            fi
-          fi
-          echo "tag=$ver" >> "$GITHUB_OUTPUT"
-          echo "bust=ma-server-$ver" >> "$GITHUB_OUTPUT"
-
       - name: Resolve image tag
         id: img
         run: |
           if [ -n "${{ inputs.image_tag }}" ]; then
             echo "tag=${{ inputs.image_tag }}" >> "$GITHUB_OUTPUT"
           else
-            # stable release tracking: everything builds into `latest`
             echo "tag=latest" >> "$GITHUB_OUTPUT"
           fi
+          # The frontend is cloned from a moving ref (`main`), so bust its
+          # cache daily — otherwise BuildKit would keep the stale clone forever.
+          echo "bust=$(date -u +%F)" >> "$GITHUB_OUTPUT"
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -82,7 +64,7 @@ jobs:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
             type=raw,value=${{ steps.img.outputs.tag }}
-            type=raw,value=${{ steps.rel.outputs.tag }}
+            type=raw,value=beta
             type=raw,value=${{ github.sha }}
 
       - name: Build and push
@@ -97,6 +79,6 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
           build-args: |
-            MA_SERVER_TAG=${{ steps.rel.outputs.tag }}
-            FRONTEND_CLONE_BUST=${{ steps.rel.outputs.bust }}
+            MA_SERVER_TAG=beta
+            FRONTEND_CLONE_BUST=${{ steps.img.outputs.bust }}
           provenance: false

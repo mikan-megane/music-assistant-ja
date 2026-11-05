@@ -1,8 +1,10 @@
 # syntax=docker/dockerfile:1
 
 # The upstream MA server tag is parameterised so the Actions workflow can target
-# a specific release without editing this file (default: latest stable).
-ARG MA_SERVER_TAG=latest
+# a specific release without editing this file (default: upstream beta channel —
+# the deployed DB was migrated by a beta release, and MA migrations are
+# forward-only, so stable releases cannot run it).
+ARG MA_SERVER_TAG=beta
 ARG FRONTEND_REF=main
 
 # ---- Stage 1: build the MA frontend from source with ja.json injected --------
