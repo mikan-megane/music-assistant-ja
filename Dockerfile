@@ -10,6 +10,12 @@ FROM node:22-bookworm AS frontend
 
 ARG FRONTEND_REF
 
+# Cache-bust: pi-local-build.sh passes the upstream MA release it targets, so
+# the frontend checkout below is re-cloned whenever the tracked MA release
+# changes (a moving ref like `main` would otherwise be cached forever between
+# releases and silently keep serving the old commit).
+ARG FRONTEND_CLONE_BUST=
+
 RUN corepack enable
 WORKDIR /app
 
