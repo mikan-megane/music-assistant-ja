@@ -11,16 +11,17 @@ on:
   workflow_dispatch:
     inputs:
       upstream_tag:
-        description: "Upstream MA server tag to build against (e.g. beta, latest, 2.9.9)"
+        description: "Upstream MA server tag to build against (e.g. latest, 2.10.9)"
         required: false
-        default: "beta"
       image_tag:
         description: "Tag for the published image (default: latest)"
         required: false
         default: "latest"
-    # NOTE: the weekly cron trigger was removed — the Raspberry Pi now builds
-    # the image locally on a cron of its own (see scripts/pi-local-build.sh).
-    # Re-add a `schedule:` block here to resume nightly/weekly baseline builds.
+  schedule:
+    # Daily: follow the latest stable upstream MA release.
+    # arm64-only + native arm runner keeps this well under the 6h job limit
+    # (the old weekly QEMU multi-arch run was cancelled at exactly 6h1m).
+    - cron: "0 4 * * *"
 
 env:
   REGISTRY: ghcr.io
@@ -28,7 +29,8 @@ env:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    # Free native arm64 runner for public repos — no QEMU emulation needed.
+    runs-on: ubuntu-24.04-arm
     permissions:
       contents: read
       packages: write
@@ -36,29 +38,32 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Resolve upstream tag
-        id: ref
+      - name: Resolve upstream MA version
+        id: rel
         run: |
           if [ -n "${{ inputs.upstream_tag }}" ]; then
-            echo "tag=${{ inputs.upstream_tag }}" >> "$GITHUB_OUTPUT"
+            ver="${{ inputs.upstream_tag }}"
           else
-            echo "tag=beta" >> "$GITHUB_OUTPUT"
+            # latest stable release of music-assistant/server, e.g. "2.10.9"
+            ver="$(curl -fsSL https://api.github.com/repos/music-assistant/server/releases/latest \
+              | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n1)"
+            if [ -z "$ver" ]; then
+              echo "::warning::could not resolve latest upstream release; skipping run"
+              exit 1
+            fi
           fi
+          echo "tag=$ver" >> "$GITHUB_OUTPUT"
+          echo "bust=ma-server-$ver" >> "$GITHUB_OUTPUT"
 
       - name: Resolve image tag
         id: img
         run: |
           if [ -n "${{ inputs.image_tag }}" ]; then
             echo "tag=${{ inputs.image_tag }}" >> "$GITHUB_OUTPUT"
-          elif [ "${{ github.event_name }}" = "schedule" ]; then
-            echo "tag=beta" >> "$GITHUB_OUTPUT"
           else
-            # Use the upstream MA version when building on push/schedule
+            # stable release tracking: everything builds into `latest`
             echo "tag=latest" >> "$GITHUB_OUTPUT"
           fi
-
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -77,20 +82,21 @@ jobs:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
             type=raw,value=${{ steps.img.outputs.tag }}
+            type=raw,value=${{ steps.rel.outputs.tag }}
             type=raw,value=${{ github.sha }}
-            type=schedule,pattern=nightly
 
       - name: Build and push
         uses: docker/build-push-action@v6
         with:
           context: .
           file: ./Dockerfile
-          platforms: linux/arm64,linux/amd64
+          platforms: linux/arm64
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
           build-args: |
-            MA_SERVER_TAG=${{ steps.ref.outputs.tag }}
+            MA_SERVER_TAG=${{ steps.rel.outputs.tag }}
+            FRONTEND_CLONE_BUST=${{ steps.rel.outputs.bust }}
           provenance: false
