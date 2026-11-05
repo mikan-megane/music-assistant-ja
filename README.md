@@ -21,7 +21,7 @@ ghcr.io/<owner>/music-assistant-ja:beta
 ghcr.io/<owner>/music-assistant-ja:<git-sha>
 ```
 
-Multi-arch: `linux/arm64` + `linux/amd64`.
+Multi-arch: `linux/arm64` + `linux/amd64`. Only built on push to `main` or a manual trigger — the weekly cron was removed in favour of local builds on the Raspberry Pi (below).
 
 ## Usage
 
@@ -49,6 +49,26 @@ The UI auto-detects Japanese from `navigator.language`. To switch manually, open
 
 Edit `ja.json` and push to `main` — the workflow rebuilds automatically.
 
+## Local builds on the Raspberry Pi
+
+The Pi that runs the image (`raspberrypi4`) builds it itself — no GH Actions runner involved, arm64 native, no QEMU.
+
+1. Repo clone on the Pi: `~/src/music-assistant-ja` (the compose file's `build:` context points here)
+2. `bash scripts/pi-local-build.sh` does: `git pull` → `docker compose -f ~/homeassistant/docker-compose.yml build --pull music-assistant-server` → `up -d` (that service only)
+3. Built, tagged and started as `music-assistant-ja:local`. If the build fails, the running container is left untouched
+
+Cron (Mon 05:10 JST, after the 04:00 watchtower round):
+
+```
+10 5 * * 1  /bin/bash /home/mikan/src/music-assistant-ja/scripts/pi-local-build.sh
+```
+
+Output is appended to `~/src/music-assistant-ja/pi-local-build.log`.
+
+The service carries `com.centurylinklabs.watchtower.enable=false` so the nickfedor/watchtower container (which still auto-updates Home Assistant etc.) never replaces the locally built image with a registry one.
+
+Rollback: ghcr.io/mikan-megane/music-assistant-ja:beta is still pulled and available locally as a fallback — comment out `build:` and switch `image:` back to `ghcr.io/mikan-megane/music-assistant-ja:beta` in `docker-compose.yml`.
+
 ## Tracking upstream
 
-The workflow runs weekly (Mon 04:00 UTC) and rebuilds against the upstream `beta` channel. To target a specific MA server release, use the manual trigger with the `upstream_tag` input (`latest`, `2.9.9`, etc.).
+Local builds are against the upstream `beta` channel (Dockerfile `MA_SERVER_TAG` default). The `--pull` in `build` re-resolves `ghcr.io/music-assistant/server:beta` each run, so upstream beta updates are picked up automatically on the next weekly build. To target a specific MA server release, change `MA_SERVER_TAG` in `docker-compose.yml` (or pass `--build-arg` via a manual build). GH Actions can still publish a reference image to GHCR via the manual trigger (`workflow_dispatch`).

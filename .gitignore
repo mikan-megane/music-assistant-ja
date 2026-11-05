@@ -1,0 +1,3 @@
+# Local Pi build runtime files (created by scripts/pi-local-build.sh)
+pi-local-build.log
+.pi-local-build.lock

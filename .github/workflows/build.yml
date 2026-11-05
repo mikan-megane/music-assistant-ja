@@ -18,9 +18,9 @@ on:
         description: "Tag for the published image (default: latest)"
         required: false
         default: "latest"
-  schedule:
-    # Rebuild weekly to follow upstream `beta`
-    - cron: "0 4 * * 1"
+    # NOTE: the weekly cron trigger was removed — the Raspberry Pi now builds
+    # the image locally on a cron of its own (see scripts/pi-local-build.sh).
+    # Re-add a `schedule:` block here to resume nightly/weekly baseline builds.
 
 env:
   REGISTRY: ghcr.io
