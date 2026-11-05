@@ -48,4 +48,5 @@ docker compose -f "$COMPOSE_DIR/docker-compose.yml" up -d "$SERVICE"
 # Drop dangling leftovers of replaced images (untagged only; tagged images keep).
 docker image prune -f >/dev/null
 
-log "done: $(docker inspect --format '{{.Name}} ({{.State.Status}}, started {{.State.StartedAt}})' "$SERVICE" 2>/dev/null || echo 'inspect failed')"
+CID="$(docker compose -f "$COMPOSE_DIR/docker-compose.yml" ps -q "$SERVICE")"
+log "done: $(docker inspect --format '{{.Name}} ({{.State.Status}}, started {{.State.StartedAt}})' "$CID" 2>/dev/null || echo "container ${CID:-unknown}")"
