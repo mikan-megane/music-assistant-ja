@@ -58,24 +58,36 @@ containers in the `~/homeassistant` stack.
 
 ## Tracking upstream
 
-The workflow runs **daily** (04:00 UTC) and builds against the upstream
-**`beta`** channel (`MA_SERVER_TAG=beta`). The frontend is re-cloned from
-upstream `main` on every build (`FRONTEND_CLONE_BUST=$(date -u +%F)`) so a
-moving ref is never served stale from the cache.
+The workflow runs **daily** (06:00 UTC, after the ~04:04 UTC upstream nightly
+release) and builds against the newest upstream **nightly snapshot**
+(`MA_SERVER_TAG=2.11.0.dev2026110604` style, resolved via the GitHub API).
+The frontend is re-cloned from upstream `main` on every snapshot bump
+(`FRONTEND_CLONE_BUST`), so the moving ref is never served stale from the
+cache.
 
-Why beta and not the latest stable release: the deployed instance ran a beta
-(`2.11.0b8`) whose SQLite schema was migrated forward, and MA migrations are
-**forward-only** — stable `2.10.9` refuses that database
-(`no such column: favorite`). Revisit stable tracking only when the upstream
-stable channel reaches ≥ 2.11. If you ever try, take a snapshot first:
+Why the nightly snapshots instead of the `beta` tag: `beta` and the nightlies
+are cut from the same upstream `dev` branch, but the paused `beta` tag
+(`2.11.0b8`, API schema 101) is now older than what frontend `main` requires
+(≥ 102) — rebuilding the frontend from `main` and pairing it with `beta`
+shows the **"update your server"** wall in the web UI. The daily snapshots
+(schema 103 as of 2026-11-06) pair naturally with `frontend/main`.
+
+Publishing:
+
+```
+ghcr.io/<owner>/music-assistant-ja:latest
+ghcr.io/<owner>/music-assistant-ja:<git-sha>
+```
+
+A pre-snapshot of the pre-nightly data is kept at
+`raspberrypi4:~/homeassistant/music-assistant-server2.auto-backups/data-predowngrade-2.11.0b8.tar.gz`.
+MA migrations are forward-only — if you ever build against an *older* upstream
+tag, take a snapshot first:
 
 ```bash
 docker run --rm -v ~/homeassistant/music-assistant-server2:/data:ro alpine \
   tar czf - -C / data > ~/ma-data-backup.tar.gz
 ```
 
-A pre-downgrade snapshot of the 2.11.0b8 data is kept at
-`raspberrypi4:~/homeassistant/music-assistant-server2.auto-backups/data-predowngrade-2.11.0b8.tar.gz`.
-
-Use the manual trigger (`workflow_dispatch`) to override the published tag
-(`image_tag` input).
+Use the manual trigger (`workflow_dispatch`) to pin a specific upstream tag
+(`upstream_tag`) and/or override the published tag (`image_tag`).

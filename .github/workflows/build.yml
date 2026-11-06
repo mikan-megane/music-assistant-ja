@@ -10,15 +10,23 @@ on:
       - .github/workflows/build.yml
   workflow_dispatch:
     inputs:
+      upstream_tag:
+        description: "Upstream MA server tag to build against (e.g. 2.11.0.dev2026110604; default: newest nightly)"
+        required: false
       image_tag:
         description: "Tag for the published image (default: latest)"
         required: false
         default: "latest"
   schedule:
-    # Daily: follow the upstream `beta` channel. Native arm64 runner keeps this
-    # fast (~4 min) — the old weekly QEMU multi-arch run was cancelled at the
-    # 6 h job limit (see run 41439882133).
-    - cron: "0 4 * * *"
+    # Daily: follow the upstream nightly snapshot channel. Both `beta` and the
+    # daily `X.Y.Z.devYYYYMMDDHH` releases are cut from the same `dev` branch,
+    # but the frontend needs the fresher nights: frontend `main` bumps its
+    # minimum server API schema for the snapshots (beta 2.11.0b8 = schema 101,
+    # frontend main requires >= 102 → "update your server" wall; the daily
+    # dev 2026-11-06 snapshot = schema 103). Runs at 06:00 UTC, after the
+    # ~04:04 UTC nightly release, so the frontend clone and the server
+    # snapshot are the same day. Native arm64 runner keeps it ~4 min.
+    - cron: "0 6 * * *"
 
 env:
   REGISTRY: ghcr.io
@@ -43,6 +51,35 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Resolve upstream MA snapshot
+        id: rel
+        run: |
+          if [ -n "${{ inputs.upstream_tag }}" ]; then
+            ver="${{ inputs.upstream_tag }}"
+          else
+            # Newest published release that looks like a nightly snapshot
+            # (X.Y.Z.devN). The releases API sorts newest-first; prefer the
+            # first nightly in the list and fall back to the first entry
+            # (stable/beta) if no nightly is present.
+            ver="$(curl -fsSL 'https://api.github.com/repos/music-assistant/server/releases?per_page=15' \
+              | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' \
+              | awk '$1 ~ /\.dev[0-9]+$/ {print; exit}' )"
+            if [ -z "$ver" ]; then
+              ver="$(curl -fsSL 'https://api.github.com/repos/music-assistant/server/releases?per_page=15' \
+                | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' \
+                | head -n1)"
+            fi
+            if [ -z "$ver" ]; then
+              echo "::warning::could not resolve the newest upstream snapshot; failing the run"
+              exit 1
+            fi
+          fi
+          echo "tag=$ver" >> "$GITHUB_OUTPUT"
+          # Rounded ref: the frontend is cloned from a moving ref (`main`), so
+          # bust its cache whenever the tracked server snapshot changes —
+          # otherwise BuildKit would keep the stale clone forever.
+          echo "bust=ma-server-$ver" >> "$GITHUB_OUTPUT"
+
       - name: Resolve image tag
         id: img
         run: |
@@ -51,9 +88,6 @@ jobs:
           else
             echo "tag=latest" >> "$GITHUB_OUTPUT"
           fi
-          # The frontend is cloned from a moving ref (`main`), so bust its
-          # cache daily — otherwise BuildKit would keep the stale clone forever.
-          echo "bust=$(date -u +%F)" >> "$GITHUB_OUTPUT"
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -72,8 +106,11 @@ jobs:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
             type=raw,value=${{ steps.img.outputs.tag }}
-            type=raw,value=beta
             type=raw,value=${{ github.sha }}
+            # Publish under the tracked server snapshot name only for explicit
+            # (dispatched) pinned builds — nightly snapshots would otherwise
+            # spawn a new tag in ghcr every single day.
+            ${{ inputs.upstream_tag && format('type=raw,value={0}', inputs.upstream_tag) || '' }}
 
       - name: Build and push
         uses: docker/build-push-action@v6
@@ -87,6 +124,6 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
           build-args: |
-            MA_SERVER_TAG=beta
-            FRONTEND_CLONE_BUST=${{ steps.img.outputs.bust }}
+            MA_SERVER_TAG=${{ steps.rel.outputs.tag }}
+            FRONTEND_CLONE_BUST=${{ steps.rel.outputs.bust }}
           provenance: false

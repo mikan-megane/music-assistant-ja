@@ -1,9 +1,14 @@
 # syntax=docker/dockerfile:1
 
 # The upstream MA server tag is parameterised so the Actions workflow can target
-# a specific release without editing this file (default: upstream beta channel —
-# the deployed DB was migrated by a beta release, and MA migrations are
-# forward-only, so stable releases cannot run it).
+# a specific release without editing this file. The workflow passes the newest
+# upstream nightly snapshot (X.Y.Z.devN, same dev branch as beta but fresher):
+# the frontend below is built from upstream `main`, whose minimum server API
+# schema tracks those snapshots — an old beta (e.g. 2.11.0b8, schema 101) is
+# rejected by today's frontend (requires >= 102) with the "update your server"
+# wall. Only pair a beta/stable tag with a matching-era frontend checkout.
+# MA migrations are forward-only, so never build against an older tag than
+# what is currently deployed.
 ARG MA_SERVER_TAG=beta
 ARG FRONTEND_REF=main
 
